@@ -35,6 +35,17 @@ brush_size = 10
 smooth_x, smooth_y = None, None
 SMOOTH = 0.6
 
+stroke_history = []
+redo_history   = []
+current_stroke = []
+
+def redraw_canvas():
+    c = np.zeros((frame_h, frame_w, 3), dtype=np.uint8)
+    for stroke in stroke_history:
+        for i in range(1, len(stroke)):
+            cv2.line(c, stroke[i-1], stroke[i], draw_color, brush_size)
+    return c
+
 with HandLandmarker.create_from_options(options) as detector:
     while True:
         ok, frame = cap.read()
@@ -62,17 +73,23 @@ with HandLandmarker.create_from_options(options) as detector:
             middle_up = lm[12].y < lm[9].y
 
             if index_up and not middle_up:
-                # Pinching = draw
                 cv2.circle(frame, (smooth_x, smooth_y), brush_size, draw_color, -1)
                 if prev_x is not None:
                     cv2.line(canvas, (prev_x, prev_y), (smooth_x, smooth_y), draw_color, brush_size)
+                    current_stroke.append((prev_x, prev_y))  # save actual drawn point
                 prev_x, prev_y = smooth_x, smooth_y
             else:
-                # Not pinching = pause
-                cv2.circle(frame, (smooth_x, smooth_y), brush_size, (0, 255, 0), 2)
+                if current_stroke:
+                    stroke_history.append(current_stroke.copy())
+                    redo_history.clear()
+                    current_stroke = []
                 prev_x = prev_y = None
 
         else:
+            if current_stroke:
+                stroke_history.append(current_stroke.copy())
+                redo_history.clear()
+                current_stroke = []
             smooth_x = smooth_y = None
             prev_x = prev_y = None
 
@@ -83,15 +100,36 @@ with HandLandmarker.create_from_options(options) as detector:
         fg       = cv2.bitwise_and(canvas, canvas, mask=mask)
         output   = cv2.add(bg, fg)
 
-        cv2.rectangle(output, (0, frame_h - 28), (frame_w, frame_h), (20, 20, 20), -1)
-        cv2.putText(output, "Pinch=draw | Open hand=pause | Q=quit | C=clear",
-                    (8, frame_h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (160, 160, 160), 1)
+        cv2.rectangle(output, (0, frame_h-28), (frame_w, frame_h), (20,20,20), -1)
+        cv2.putText(output, "Index=draw | 2 fingers=pause | Z=undo | Y=redo | C=clear",
+                    (8, frame_h-10), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (160,160,160), 1)
 
         cv2.imshow("Air Drawing", output)
 
         key = cv2.waitKey(1) & 0xFF
-        if   key == ord('q'): break
-        elif key == ord('c'): canvas = cv2.GaussianBlur(canvas, (0,0), 30); canvas[canvas < 10] = 0
+        if key == ord('q'):
+            break
+        elif key == ord('z'):
+            if stroke_history:
+                redo_history.append(stroke_history.pop())
+                canvas = redraw_canvas()
+        elif key == ord('y'):
+            if redo_history:
+                stroke_history.append(redo_history.pop())
+                canvas = redraw_canvas()
+        elif key == ord('c'):
+          stroke_history.clear()
+          redo_history.clear()
+          current_stroke = []
+          canvas = np.zeros((frame_h, frame_w, 3), dtype=np.unit8)
+        elif key == ord('z'):
+          if stroke_history:
+             redo_history.append(stroke_history.pop())
+             canvas = redraw_canvas()
+        elif key == ord('y'):
+          if redo_history:
+            stroke_history.append(redo_history.pop())
+            canvas = redraw_canvas()      
 
 cap.release()
 cv2.destroyAllWindows()
