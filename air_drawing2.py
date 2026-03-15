@@ -20,7 +20,10 @@ if not os.path.exists(model_path):
 options = HandLandmarkerOptions(
     base_options=BaseOptions(model_asset_path=model_path),
     running_mode=VisionRunningMode.IMAGE,
-    num_hands=1
+    num_hands=1,
+    min_hand_detection_confidence=0.7,
+    min_hand_presence_confidence=0.7,
+    min_tracking_confidence=0.7
 )
 
 cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
@@ -30,14 +33,23 @@ canvas  = np.zeros((frame_h, frame_w, 3), dtype=np.uint8)
 
 prev_x, prev_y = None, None
 draw_color = (0, 255, 255)
-brush_size = 10
+brush_size = 5
+
+colors = [
+    (0, 255, 255),
+    (0, 255, 0),
+    (0, 0, 255),
+    (255, 100, 0),
+    (255, 255, 255),
+]
 
 smooth_x, smooth_y = None, None
-SMOOTH = 0.6
+SMOOTH = 0.3
 
 stroke_history = []
 redo_history   = []
 current_stroke = []
+missed_frames  = 0
 
 def redraw_canvas():
     c = np.zeros((frame_h, frame_w, 3), dtype=np.uint8)
@@ -53,11 +65,21 @@ with HandLandmarker.create_from_options(options) as detector:
             break
 
         frame = cv2.flip(frame, 1)
+
+        # Draw color buttons
+        bx = 10
+        for col in colors:
+            cv2.rectangle(frame, (bx, 10), (bx+40, 50), col, -1)
+            if col == draw_color:
+                cv2.rectangle(frame, (bx, 10), (bx+40, 50), (255,255,255), 2)
+            bx += 50
+
         rgb      = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
         result   = detector.detect(mp_image)
 
         if result.hand_landmarks:
+            missed_frames = 0
             lm = result.hand_landmarks[0]
 
             cx = int(lm[8].x * frame_w)
@@ -73,11 +95,21 @@ with HandLandmarker.create_from_options(options) as detector:
             middle_up = lm[12].y < lm[9].y
 
             if index_up and not middle_up:
-                cv2.circle(frame, (smooth_x, smooth_y), brush_size, draw_color, -1)
-                if prev_x is not None:
-                    cv2.line(canvas, (prev_x, prev_y), (smooth_x, smooth_y), draw_color, brush_size)
-                    current_stroke.append((prev_x, prev_y))  # save actual drawn point
-                prev_x, prev_y = smooth_x, smooth_y
+                if cy < 50:
+                    # Color selection zone
+                    bx = 10
+                    for col in colors:
+                        if bx <= cx <= bx+40:
+                            draw_color = col
+                            prev_x = prev_y = None
+                        bx += 50
+                elif cy < frame_h * 0.75:
+                    # Drawing zone
+                    cv2.circle(frame, (smooth_x, smooth_y), brush_size, draw_color, -1)
+                    if prev_x is not None:
+                        cv2.line(canvas, (prev_x, prev_y), (smooth_x, smooth_y), draw_color, brush_size)
+                        current_stroke.append((prev_x, prev_y))
+                    prev_x, prev_y = smooth_x, smooth_y
             else:
                 if current_stroke:
                     stroke_history.append(current_stroke.copy())
@@ -86,12 +118,14 @@ with HandLandmarker.create_from_options(options) as detector:
                 prev_x = prev_y = None
 
         else:
-            if current_stroke:
-                stroke_history.append(current_stroke.copy())
-                redo_history.clear()
-                current_stroke = []
-            smooth_x = smooth_y = None
-            prev_x = prev_y = None
+            missed_frames += 1
+            if missed_frames > 5:
+                if current_stroke:
+                    stroke_history.append(current_stroke.copy())
+                    redo_history.clear()
+                    current_stroke = []
+                smooth_x = smooth_y = None
+                prev_x = prev_y = None
 
         gray     = cv2.cvtColor(canvas, cv2.COLOR_BGR2GRAY)
         _, mask  = cv2.threshold(gray, 10, 255, cv2.THRESH_BINARY)
@@ -118,18 +152,10 @@ with HandLandmarker.create_from_options(options) as detector:
                 stroke_history.append(redo_history.pop())
                 canvas = redraw_canvas()
         elif key == ord('c'):
-          stroke_history.clear()
-          redo_history.clear()
-          current_stroke = []
-          canvas = np.zeros((frame_h, frame_w, 3), dtype=np.unit8)
-        elif key == ord('z'):
-          if stroke_history:
-             redo_history.append(stroke_history.pop())
-             canvas = redraw_canvas()
-        elif key == ord('y'):
-          if redo_history:
-            stroke_history.append(redo_history.pop())
-            canvas = redraw_canvas()      
+            stroke_history.clear()
+            redo_history.clear()
+            current_stroke = []
+            canvas = np.zeros((frame_h, frame_w, 3), dtype=np.uint8)
 
 cap.release()
 cv2.destroyAllWindows()
