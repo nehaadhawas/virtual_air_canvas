@@ -1,0 +1,5 @@
+hand_landmarker.task
+.vscode/
+tempCodeRunnerFile.python
+__pycache__/
+*.pyc
